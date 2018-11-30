@@ -1,0 +1,94 @@
+1.JNI中基本类型(Primitive types)的映射：
+	JAVA		JNI		typedef
+	boolean		jboolean		uint8_t
+	byte		jbyte		int8_t
+	char		jchar		uint16_t
+	short		jshort		int16_t
+	int		jint		int32_t
+	long		jlong		int64_t
+	float		jfloat		float
+	double		jdouble		double
+另外JNI还有1种未和JAVA关联的基本类型(Primitive types)：
+			jsize		jint
+
+
+
+2.相比基本类型(Primitive types)，对象类型(Reference types)的传递要复杂很多。 Java层对象作为opaque references(指针)传递到JNI层。Opaque references是一种C的指针类型，它指向JavaVM内部数据结构。
+使用这种指针的目的是：不希望JNI用户了解JavaVM内部数据结构。对Opaque reference所指结构的操作，都要通过JNI方法进行。一定要按这种原则编程，千万不要为了效率或容易的取到某个值，绕过JNI，直接
+操作opaque reference。JNI中对象类型(Reference types)：
+	JNI		typedef		inherit relationship
+	jobject		_jobject*		_jobject
+	jclass		_jclass*		_jclass:_jobject
+	jstring		_jstring*		_jstring:_jobject
+	jarray		_jarray*		_jarray:_jobject
+	jobjectArray	_jobjectArray*	_jobjectArray:_jArray
+	jbooleanArray	_jbooleanArray*	_jbooleanArray:_jArray
+	jbyteArray	_jbyteArray*	_jbyteArray:_jArray
+	jcharArray	_jcharArray*	_jcharArray:_jArray
+	jshortArray	_jshortArray*	_jshortArray:_jArray
+	jintArray		_jintArray*	_jintArray:_jArray
+	jlongArray	_jlongArray*	_jlongArray:_jArray
+	jfloatArray	_jfloatArray*	_jfloatArray:_jArray
+	jdoubleArray	_jdoubleArray*	_jdoubleArray:_jArray
+	jthrowable	_jthrowable*	_jthrowable:_jobject
+	jweak		_jobject*		_jobject
+另外JNI中还有2种未和JAVA关联的对象类型(Reference types):
+	jfieldID		_jfieldID*		_jfieldID
+	jmethodID	_jmethodID*	_jmethodID
+
+
+
+3.访问jstring类型：
+	1.const jchar* GetStringChars(jstring string, jboolean* isCopy);
+	   void ReleaseStringChars(jstring string, const jchar* chars);
+	   通过一个jstring的引用对象重新分配一个Unicode编码的C类型的string，记得检测GetStringChars的返回值，因为调用该函数会有内存分配操作，失败后，该函数返回NULL，并抛出
+	   OutOfMemoryError异常。 调用ReleaseStringChars释放GetStringChars中分配的内存。
+
+	2.const char* GetStringUTFChars(jstring string, jboolean* isCopy);
+	   void ReleaseStringUTFChars(jstring string, const char* utf);
+	   通过一个jstring的引用对象重新分配一个UTF-8编码的C类型的string，记得检测GetStringUTFChars的返回值，因为调用该函数会有内存分配操作，失败后，该函数返回NULL，并抛出
+	   OutOfMemoryError异常。 调用ReleaseStringUTFChars释放GetStringUTFChars中分配的内存。
+
+	3.const jchar* GetStringCritical(jstring string, jboolean* isCopy);
+	   void ReleaseStringCritical(jstring string, const jchar* carray);
+	   功能与GetStringChars与ReleaseStringChars相同，只是在当使用这对函数时，这对函数间的代码应被当做临界区(critical region). 在该代码区，不要调用任何会阻塞当前线程和分配对象的JNI函数，
+	   如 IO 之类的操作。
+  	   这对函数的使用，可以避免JavaVM执行GC。因为在执行Get/ReleaseStringCritical区的代码时，GC被禁用了，如果因某些原因在其他线程中引发了JavaVM执行GC操作，VM 有死锁的危险。
+	   可以嵌套调用GetStringCritical。
+	   为避免死锁，此时应尽量避免调用其他JNI方法，只允许调用GetStringCritical/ReleaseStringCritical和Get/ReleasePrimitiveArrayCritical。因VM内部Unicode编码的缘故，所以
+	   Get/ReleaseStringUTFCritical 这种涉及Unicode->UTF8转换要分配内存的函数不支持。
+
+
+	123上述声明中，有isCopy参数，当该值为JNI_TRUE，将返回str的一个拷贝；为JNI_FALSE将直接指向str的内容。注意：当isCopy为JNI_FALSE，不要修改返回值，不然将改变java.lang.String的不可变语义。
+
+ 	一般会把isCopy设为NULL，不关心Java VM对返回的指针是否直接指向java.lang.String的内容。一般不能预知VM是否会拷贝java.lang.String的内容，程序员应该假设GetStringChars会为
+	java.lang.String分配内存。在JavaVM的实现中，垃圾回收机制会移动对象，并为对象重新配置内存。一但java.lang.String占用的内存暂时无法被GC重新配置，将产生内存碎片，过多的内存碎片，会更
+	频繁的出现内存不足的假象。
+ 
+	记住在调用GetStringChars之后，要调用ReleaseStringChars做释放，不管在调用GetStringChars时为isCopy赋值JNI_TRUE还是JNI_FALSE，因不同JavaVM实现的原因，ReleaseStringChars可能释放
+	内存，也可能释放一个内存占用标记(isCopy参数的作用，从GetStringChars返回一个指针，该指针直接指向String的内容，为了避免该指针指向的内容被GC，要对该内存做锁定标记)。
+	
+
+	4.jsize GetStringLength(jstring string);
+	   获得以Unicode编码的字符串长度。
+	   jsize GetStringUTFLength(jstring string);
+	   获得以UTF-8编码的字符串长度。也可以使用strlen计算GetStringUTFChars的返回值，得到字串长度。
+
+	5.jstring NewString(const jchar* unicodeChars, jsize len);
+	   用Unicode编码的C类型的string构造 java.lang.String；如果此时没有足够的内存，NewString和NewNewStringUTF将抛OutOfMemoryError异常，同时返回NULL。
+	   jstring NewStringUTF(const char* bytes);
+	   用UTF-8编码的C类型的string构造 java.lang.String；如果此时没有足够的内存，NewString和NewNewStringUTF将抛OutOfMemoryError异常，同时返回NULL。
+
+	6.void GetStringRegion(jstring str, jsize start, jsize len, jchar* buf);
+	   从jstring的start index开始选取长度len向准备好的缓冲区buf以Unicode编码赋值C类型的string,start index和len这两个参数以Unicode编码计算. 该函数会做边界检查，所以可能抛出
+	   StringIndexOutOfBoundsException。
+	   void GetStringUTFRegion(jstring str, jsize start, jsize len, char* buf);
+	   从jstring的start index开始选取长度len向准备好的缓冲区buf以UTF-8编码赋值C类型的string,start index和len这两个参数以Unicode编码计算. 该函数会做边界检查，所以可能抛出
+	   StringIndexOutOfBoundsException。
+
+	   因为该函数不涉及内存操作，所以较GetStringUTFChars使用要简单。
+	   GetStringUTFRegion很有用，因为你不能修改GetStringUTFChars返回值，所以需要另外malloc/strcpy之后，再操作返回值，耗时费力，不如直接使用GetStringUTFRegion来的简洁、高效。
+
+
+
+	
